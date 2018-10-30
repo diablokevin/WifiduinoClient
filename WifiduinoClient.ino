@@ -28,6 +28,7 @@
 //#include <ESP8266WiFiGeneric.h>
 //#include <ESP8266WiFiAP.h>
 
+#include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 
 #define DEBUG;
@@ -52,7 +53,9 @@ int onlineMode = 1;  //设置在线或离线模式
 //计时器变量
 long beginTime = 0;
 long stopTime = 0;
-
+long timelimit = 0;
+int hasRingAtLastMinute = 0;
+int hasRingAtLastFiveSeconds = 0;
 
 //WiFi和tcp server的相关变量
 int wifistatus = 0;  //0等待连接，1连接中，2连接成功,-1连接失败
@@ -138,7 +141,7 @@ void setup()
 	//Serial.println("IP address: ");
 	//Serial.println(WiFi.localIP());//WiFi.localIP()返回8266获得的ip地址
 }
-void(*resetFunc) (void) = 0;
+
 void loop()
 {
 	
@@ -192,15 +195,15 @@ void loop()
 		}
 		if (cmd == "timerstart")
 		{
-			StartTimer(FromScreen,firstpara);
+			StartTimer(FromScreen);
 		}
 		if (cmd == "timerstop")
 		{
-			StopTimer(FromScreen, firstpara);
+			StopTimer(FromScreen);
 		}
 		if (cmd == "timerreset")
 		{
-			ResetTimer(FromScreen,firstpara);			
+			ResetTimer(FromScreen);			
 		}
 		if (cmd == "timerready")
 		{
@@ -218,7 +221,7 @@ void loop()
 		
 		if (timerStatus == 10) //10为手动准备好
 		{		
-			StartTimer(FromButton, "manual");
+			StartTimer(FromButton);
 		}
 		else if (timerStatus == 0)
 		{
@@ -226,11 +229,11 @@ void loop()
 		}
 		else if (timerStatus == 11) //11为手动计时中,21为自动计时中，都需要用按钮停止
 		{
-			StopTimer(FromButton,"manual");
+			StopTimer(FromButton);
 		}
 		else if ( timerStatus == 21) //11为手动计时中,21为自动计时中，都需要用按钮停止
 		{
-			StopTimer(FromButton,"auto");
+			StopTimer(FromButton);
 		}
 	}
 
@@ -258,22 +261,29 @@ void loop()
 #endif // DEBUG_tcp
 		if (cmd== "timerstart")  //比较字符串
 		{
-			Serial.println("timerstart");
-			StartTimer(FromTCP,"auto");
+			//Serial.println("timerstart");
+			StartTimer(FromTCP);
 		}
 		if (cmd== "timerstop")
 		{
-			StopTimer(FromTCP, "auto");
+			StopTimer(FromTCP);
 		}
 		if (cmd == "timerreset")
 		{
-			ResetTimer(FromTCP, "auto");
+			ResetTimer(FromTCP);
 		}
-		if (cmd == "devicereset")
+		if (cmd == "setdata")
 		{
-			resetFunc();
+			if (firstpara == "eventname")
+			{
+				WriteDataToScreenEePROM(secondpara,"100");  //项目名称在EEPROM中位置设置为100
+			}
+			else if (firstpara == "timelimit")
+			{
+				timelimit = atoi(secondpara.c_str()) * 1000;
+			}
 		}
-
+		
 	}
 
 	//定时检查目前的wifi和server状态
@@ -352,6 +362,37 @@ void loop()
 		}
 		
 	}
+
+	//处理计时器限制时间
+
+	if (timerStatus == 11 || timerStatus == 21)
+	{
+		if (!hasRingAtLastMinute)
+		{
+			int timeused = CalTimespan();
+			if ((timelimit - timeused) <= 60 * 1000)
+			{
+				hasRingAtLastMinute = 1;
+				playNote('C', 1 * 500);			
+
+			}
+
+		}
+		if (!hasRingAtLastFiveSeconds)
+		{
+			int timeused = CalTimespan();
+			if ((timelimit - timeused) <= 5 * 1000)
+			{
+				hasRingAtLastFiveSeconds = 1;
+				CountDownTone();
+				
+				StopTimer(FromButton);
+			}
+		}
+		
+	}
+
+
 	/*
 
 
@@ -380,116 +421,163 @@ void loop()
 	
 }
 
-void StartTimer(int source, String page)
+void StartTimer(int source)
 {
 #ifdef DEBUG
 	Serial.println("start timer");
 #endif // DEBUG
-	if (timerStatus == 10 ||timerStatus == 20)
+	if (timerStatus == 10 )
 	{
 		if (source == FromButton)
 		{
 
 			timerStatus = 11;
 			SendCmdToScreen("click btn_start,0");
+			beginTime = millis();
+			digitalWrite(ledPin, HIGH);
 
 		}
-		else if (source == FromTCP&& timerStatus == 20)
+		
+		else if (source == FromScreen)
+		{
+		
+				timerStatus = 11;
+				beginTime = millis();
+				digitalWrite(ledPin, HIGH);
+		
+
+		}
+		
+		
+	}
+	if (timerStatus == 20)
+	{
+		
+		if (source == FromTCP)
 		{
 
 			timerStatus = 21;
 			CountDownTone();
 			SendCmdToScreen("click btn_start,0");
+			beginTime = millis();
+			digitalWrite(ledPin, HIGH);
 		}
-		else if (source == FromScreen)
-		{
-			if (page == "manual")
-			{
-				timerStatus = 11;
-			}
-
-		}
-		beginTime = millis();
-		digitalWrite(ledPin, HIGH);
-		
-	}
 	
+		
+
+	}
 }
 
-void StopTimer(int source, String page)
+void StopTimer(int source)
 {
 #ifdef DEBUG
 	Serial.println("stop timer");
 #endif // DEBUG
-	if (timerStatus == 11 || timerStatus == 21)
+	if (timerStatus == 11 )
 	{
 		if (source == FromButton)
 		{
-			if (timerStatus==11)
-			{
-				timerStatus = 12;
-			}
-			else if (timerStatus ==21)
-			{
-				timerStatus = 22;
-			}
+			
+			timerStatus = 12;
+			SendCmdToScreen("click btn_stop,0");
+			stopTime = millis();
+			digitalWrite(ledPin, LOW);
+
+		}
+	
+		else if (source == FromScreen)
+		{
+			
+			timerStatus = 12;
+			stopTime = millis();
+			digitalWrite(ledPin, LOW);
+			
+		
+		}
+	
+		
+	}
+
+	if (timerStatus == 21)
+	{
+		if (source == FromButton)
+		{
+			
+			timerStatus = 22;			
 			SendCmdToScreen("click btn_stop,0");
 		}
-		else if (source == FromTCP&& timerStatus == 21)
+		else if (source == FromTCP )
 		{
 			timerStatus = 22;
 			SendCmdToScreen("click btn_stop,0");
 		}
 		else if (source == FromScreen)
 		{
-			if (page == "manual")
-			{
-				timerStatus = 12;
-			}
-			else if (page == "auto")
-			{
-				timerStatus = 22;
-			}
+
+			timerStatus = 22;
+	
 		}
 		stopTime = millis();
 		digitalWrite(ledPin, LOW);
-		
+
 	}
 	
 }
 
-void ResetTimer(int source, String page)
+void ResetTimer(int source)
 {
 #ifdef DEBUG
 	Serial.println("reset timer");
 #endif // DEBUG
-	if (timerStatus == 12 || timerStatus == 22 || timerStatus == 10 || timerStatus == 20 || timerStatus == 0)
+	if (timerStatus == 12 ||  timerStatus == 10 )
 	{
 		if (source == FromButton)
 		{
 			timerStatus = 10;
 			SendCmdToScreen("click btn_reset,0");
+			digitalWrite(ledPin, LOW);
+			beginTime = 0;
+			stopTime = 0;
+			hasRingAtLastFiveSeconds = 0;
+			hasRingAtLastMinute = 0;
 		}
-		else if (source == FromTCP)
+		
+		else if (source == FromScreen)
+		{
+				timerStatus = 10;
+				digitalWrite(ledPin, LOW);
+				beginTime = 0;
+				stopTime = 0;
+				hasRingAtLastFiveSeconds = 0;
+				hasRingAtLastMinute = 0;
+			
+		}
+
+	
+	}
+	if ( timerStatus == 22 || timerStatus == 20 || timerStatus == 0)
+	{
+		if (source == FromTCP)
 		{
 			timerStatus = 0;
 			SendCmdToScreen("click btn_reset,0");
+			digitalWrite(ledPin, LOW);
+			beginTime = 0;
+			stopTime = 0;
+			hasRingAtLastFiveSeconds = 0;
+			hasRingAtLastMinute = 0;
 		}
 		else if (source == FromScreen)
-		{
-			if (page == "manual")
-			{
-				timerStatus = 10;
-			}
-			else if (page == "auto")
-			{
+		{	
 				timerStatus = 0;
-			}
+				digitalWrite(ledPin, LOW);
+				beginTime = 0;
+				stopTime = 0;		
+				hasRingAtLastFiveSeconds = 0;
+				hasRingAtLastMinute = 0;
 		}
 
-		digitalWrite(ledPin, LOW);
-		beginTime = 0;
-		stopTime = 0;
+		
 	}
 }
 
@@ -585,10 +673,24 @@ void SendDataToTcp(String s)
 void ChangeValofScreenObject(String val, String obj)
 {
 	unsigned char hexdata[3] = { 0xff,0xff,0xff };	
+	Serial.write(hexdata, 3);
 	Serial.print(obj+"=");
 	Serial.write(0x22);  //双引号
 	Serial.print(val);
 	Serial.write(0x22); //双引号
+	Serial.write(hexdata, 3);
+}
+
+void WriteDataToScreenEePROM(String data, String index)
+{
+	unsigned char hexdata[3] = { 0xff,0xff,0xff };
+	Serial.write(hexdata, 3);
+	Serial.print("wepo ");
+	Serial.write(0x22);  //双引号
+	Serial.print(data);
+	Serial.write(0x22); //双引号
+	Serial.print(",");
+	Serial.print(index);
 	Serial.write(hexdata, 3);
 }
 void ChangeValofScreenObject(unsigned char val[], String obj)
@@ -609,6 +711,7 @@ String GetCmdFromSerial()
 	{
 
 		strOnSerial = Serial.readStringUntil('#');
+		return strOnSerial;
 
 	}
 	return strOnSerial;
@@ -660,13 +763,13 @@ String GetCmdFromTcp()
 			Serial.println(strOnTcp);
 #endif // DEBUG_tcp
 
-
+			return strOnTcp;
 
 		}
 
 	}
-
 	return strOnTcp;
+	
 }
 
 //void ConnectServer(String ssid, String pwd, String serverip, String port)   //连接wifi和tcp server，连接wifi成功后再连接tcp server
